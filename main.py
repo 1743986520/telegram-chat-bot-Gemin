@@ -238,7 +238,7 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "帝ACG AI 運行中！2026 多群組強大～"
+    return "TG_bot is running"
 
 if __name__ == '__main__':
     bot.remove_webhook()

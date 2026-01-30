@@ -1,56 +1,59 @@
 #!/bin/bash
-
 set -e
 
 echo "=============================="
 echo " 🤖 Telegram Gemini Bot 部署器"
 echo "=============================="
-echo
 
-# ---- 檢查 Docker ----
-if ! command -v docker &> /dev/null; then
-  echo "❌ 未安裝 Docker，請先安裝 Docker"
-  exit 1
-fi
-
-# ---- 使用者輸入 ----
+# 讀取必要參數
 read -rp "👉 請輸入 BOT_TOKEN: " BOT_TOKEN
 read -rp "👉 請輸入 GEMINI_API_KEY: " GEMINI_API_KEY
-read -rp "👉 請輸入 Webhook DOMAIN (不含 https://): " DOMAIN
+read -rp "👉 請輸入 Webhook DOMAIN (不含 https://): " WEBHOOK_DOMAIN
 
-if [[ -z "$BOT_TOKEN" || -z "$GEMINI_API_KEY" || -z "$DOMAIN" ]]; then
-  echo "❌ 有欄位是空的，部署中止"
-  exit 1
+# 建立臨時目錄
+TMPDIR=$(mktemp -d)
+echo "[INFO] 建立臨時目錄: $TMPDIR"
+cd "$TMPDIR"
+
+# 安裝 unzip（如果沒安裝）
+if ! command -v unzip &> /dev/null; then
+    echo "[INFO] 安裝 unzip..."
+    apt update && apt install -y unzip curl ca-certificates
 fi
 
-IMAGE_NAME="tg-gemini-bot"
-CONTAINER_NAME="tg-gemini-bot"
+# 下載專案 ZIP，強制 IPv4
+echo "[INFO] 下載專案 ZIP..."
+curl -4 -L -o bot.zip https://github.com/1743986520/telegram-chat-bot-Gemin/archive/refs/heads/main.zip
 
-echo
-echo "📦 建立 Docker 映像..."
-docker build -t $IMAGE_NAME .
+# 解壓
+echo "[INFO] 解壓專案..."
+unzip -o bot.zip
+cd telegram-chat-bot-Gemin-main
 
-# ---- 如果容器已存在 ----
-if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-  echo "⚠️ 偵測到舊容器，正在移除..."
-  docker stop $CONTAINER_NAME >/dev/null 2>&1 || true
-  docker rm $CONTAINER_NAME >/dev/null 2>&1 || true
+# 檢查必要檔案
+if [ ! -f Dockerfile ] || [ ! -f main.py ]; then
+    echo "❌ 找不到 Dockerfile 或 main.py，部署中止"
+    exit 1
 fi
 
-# ---- 啟動容器 ----
-echo "🚀 啟動 Bot..."
-docker run -d \
-  --name $CONTAINER_NAME \
-  -e BOT_TOKEN="$BOT_TOKEN" \
-  -e GEMINI_API_KEY="$GEMINI_API_KEY" \
-  -e DOMAIN="$DOMAIN" \
-  -p 8080:8080 \
-  --restart unless-stopped \
-  $IMAGE_NAME
+# 將輸入寫入環境檔
+echo "[INFO] 寫入環境變數到 .env"
+cat > .env <<EOF
+BOT_TOKEN=${BOT_TOKEN}
+GEMINI_API_KEY=${GEMINI_API_KEY}
+WEBHOOK_DOMAIN=${WEBHOOK_DOMAIN}
+EOF
 
-echo
-echo "✅ 部署完成！"
-echo "🌐 Webhook: https://$DOMAIN/webhook"
-echo "📦 容器名稱: $CONTAINER_NAME"
-echo
-echo "👉 查看日誌：docker logs -f $CONTAINER_NAME"
+# 建立 Docker 映像
+echo "[INFO] 建立 Docker 映像..."
+docker build -t tg-gemini-bot .
+
+# 啟動容器
+echo "[INFO] 啟動 Docker 容器..."
+docker run -d --name tg-gemini-bot \
+    --env-file .env \
+    -p 8080:8080 \
+    tg-gemini-bot
+
+echo "✅ 部署完成！容器名稱: tg-gemini-bot"
+echo "📌 Webhook URL: https://$WEBHOOK_DOMAIN/webhook"

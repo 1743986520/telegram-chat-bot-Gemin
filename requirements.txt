@@ -1,4 +1,17 @@
+# Telegram Gemini Bot 依賴
 pyTelegramBotAPI==4.15.2
-google-generativeai==0.3.2
-flask==2.3.3
+google-generativeai==0.6.2
+flask==3.0.2
 requests==2.31.0
+
+# 可選依賴（用於高級功能）
+# redis==5.0.1           # 用於分布式緩存
+# pymongo==4.6.0        # 用於數據庫存儲
+# sqlalchemy==2.0.25    # 用於SQL數據庫
+# apscheduler==3.10.4   # 用於定時任務
+# prometheus-client==0.19.0  # 用於監控
+
+# 開發依賴
+# pytest==7.4.3
+# black==23.11.0
+# flake8==6.1.0

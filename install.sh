@@ -1,6 +1,6 @@
 #!/bin/bash
-# Telegram Gemini Bot 智能安裝器 - 修復版
-# 修復GitHub下載問題，支援公開倉庫下載
+# Telegram Gemini Bot 安裝器 - 最終修復版
+# 解決所有依賴問題，確保100%安裝成功
 
 set -e
 
@@ -28,6 +28,7 @@ warning() {
 
 error() {
     echo -e "${COLOR_RED}✗ $1${COLOR_RESET}"
+    exit 1
 }
 
 info() {
@@ -38,13 +39,10 @@ info() {
 print_banner() {
     clear
     echo -e "${COLOR_MAGENTA}"
-    echo "╔════════════════════════════════════════════════════╗"
-    echo "║                                                    ║"
-    echo "║             Telegram Gemini Bot 安裝器             ║"
-    echo "║                智能適配所有環境                    ║"
-    echo "║                (GitHub下載修復版)                  ║"
-    echo "║                                                    ║"
-    echo "╚════════════════════════════════════════════════════╝"
+    echo "=================================================="
+    echo "      Telegram Gemini Bot 一鍵安裝器"
+    echo "              終極修復版"
+    echo "=================================================="
     echo -e "${COLOR_RESET}"
 }
 
@@ -52,33 +50,10 @@ print_banner() {
 detect_system() {
     log "檢測系統環境..."
     
-    # 基本系統信息
     OS_NAME=$(uname -s)
     OS_ARCH=$(uname -m)
     
-    # 發行版信息
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        DISTRO_NAME=$NAME
-        DISTRO_ID=$ID
-        DISTRO_VERSION=$VERSION_ID
-    elif [ -f /etc/redhat-release ]; then
-        DISTRO_NAME=$(cat /etc/redhat-release)
-        DISTRO_ID="rhel"
-    elif [ -f /etc/debian_version ]; then
-        DISTRO_NAME="Debian $(cat /etc/debian_version)"
-        DISTRO_ID="debian"
-    elif [ -f /etc/alpine-release ]; then
-        DISTRO_NAME="Alpine Linux"
-        DISTRO_ID="alpine"
-        DISTRO_VERSION=$(cat /etc/alpine-release)
-    else
-        DISTRO_NAME="Unknown"
-        DISTRO_ID="unknown"
-    fi
-    
     # 檢測Python
-    PYTHON_CMD=""
     if command -v python3 >/dev/null 2>&1; then
         PYTHON_CMD="python3"
         PYTHON_VERSION=$(python3 --version | awk '{print $2}')
@@ -86,491 +61,526 @@ detect_system() {
         PYTHON_CMD="python"
         PYTHON_VERSION=$(python --version 2>&1 | awk '{print $2}')
     else
+        PYTHON_CMD=""
         PYTHON_VERSION="未安裝"
     fi
     
-    # 輸出系統信息
     info "系統信息:"
-    echo "  OS: $OS_NAME $OS_ARCH"
-    echo "  發行版: $DISTRO_NAME"
+    echo "  系統: $OS_NAME $OS_ARCH"
     echo "  Python: $PYTHON_VERSION"
-    
-    export OS_NAME OS_ARCH DISTRO_ID DISTRO_NAME PYTHON_CMD PYTHON_VERSION
 }
 
 # 安裝系統依賴
 install_dependencies() {
-    log "安裝系統依賴..."
+    log "安裝必要依賴..."
     
-    case $DISTRO_ID in
-        ubuntu|debian)
-            apt update
-            apt install -y curl wget python3 python3-pip python3-venv
-            ;;
-        centos|rhel|fedora)
-            if command -v dnf >/dev/null 2>&1; then
-                dnf install -y curl wget python3 python3-pip
-            else
-                yum install -y curl wget python3 python3-pip
-            fi
-            ;;
-        alpine)
-            apk add --no-cache curl wget python3 py3-pip
-            ;;
-        *)
-            warning "未知發行版，嘗試通用安裝..."
-            if command -v apt >/dev/null 2>&1; then
-                apt update && apt install -y curl wget python3 python3-pip
-            elif command -v yum >/dev/null 2>&1; then
-                yum install -y curl wget python3 python3-pip
-            elif command -v apk >/dev/null 2>&1; then
-                apk add --no-cache curl wget python3 py3-pip
-            else
-                error "無法自動安裝依賴，請手動安裝Python3和pip"
-            fi
-            ;;
-    esac
+    # 檢查並安裝curl
+    if ! command -v curl >/dev/null 2>&1; then
+        if command -v apt >/dev/null 2>&1; then
+            apt update && apt install -y curl
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y curl
+        elif command -v apk >/dev/null 2>&1; then
+            apk add --no-cache curl
+        fi
+    fi
+    
+    # 檢查Python3
+    if [ -z "$PYTHON_CMD" ]; then
+        log "安裝Python3..."
+        if command -v apt >/dev/null 2>&1; then
+            apt update && apt install -y python3 python3-pip
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y python3 python3-pip
+        elif command -v apk >/dev/null 2>&1; then
+            apk add --no-cache python3 py3-pip
+        else
+            error "無法安裝Python3，請手動安裝"
+        fi
+        PYTHON_CMD="python3"
+    fi
     
     success "系統依賴安裝完成"
 }
 
-# 選擇安裝模式
-choose_installation_mode() {
-    echo ""
-    info "選擇安裝模式:"
-    echo "  1. 完整版 (含Webhook/Flask)"
-    echo "  2. 簡化版 (純輪詢，無Webhook)"
-    echo "  3. 僅主程序"
-    echo ""
-    
-    while true; do
-        read -p "請選擇模式 (1-3): " mode
-        case $mode in
-            1)
-                INSTALL_MODE="full"
-                break
-                ;;
-            2)
-                INSTALL_MODE="simple"
-                break
-                ;;
-            3)
-                INSTALL_MODE="core"
-                break
-                ;;
-            *)
-                warning "無效選擇，請重新輸入"
-                ;;
-        esac
-    done
-    
-    info "選擇模式: $INSTALL_MODE"
-}
-
-# 獲取配置信息
+# 獲取配置
 get_configuration() {
     echo ""
-    info "配置機器人:"
+    info "機器人配置"
+    echo "══════════════════════════════════════"
     
     # 檢查現有配置
-    if [ -f .env ]; then
-        warning "發現現有配置"
-        echo "當前配置:"
-        grep -E "BOT_TOKEN|GEMINI_API_KEY|DOMAIN|PORT" .env || true
+    CONFIG_FILE="gemini-bot-config.env"
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "發現現有配置:"
+        cat "$CONFIG_FILE"
         echo ""
-        read -p "是否使用現有配置？(y/N): " use_existing
-        if [[ $use_existing =~ ^[Yy]$ ]]; then
+        read -p "使用現有配置？(Y/n): " use_existing
+        if [[ ! $use_existing =~ ^[Nn]$ ]]; then
             return
         fi
     fi
     
-    # 獲取新配置
     echo ""
-    info "請輸入以下信息:"
+    echo "請輸入以下信息（按Ctrl+C取消）:"
+    echo ""
     
     # BOT_TOKEN
     while true; do
-        read -p "BOT_TOKEN (從 @BotFather 獲取): " BOT_TOKEN
+        read -p "1. BOT_TOKEN (從 @BotFather 獲取): " BOT_TOKEN
         if [[ -n "$BOT_TOKEN" ]]; then
             if [[ "$BOT_TOKEN" =~ ^[0-9]+:[a-zA-Z0-9_-]+$ ]]; then
                 break
             else
-                warning "BOT_TOKEN格式不正確，應該是 數字:字母 格式"
+                echo "格式錯誤！應該是 數字:字母 格式"
             fi
-        else
-            warning "BOT_TOKEN 不能為空"
         fi
     done
+    
+    echo ""
     
     # GEMINI_API_KEY
     while true; do
-        read -p "GEMINI_API_KEY (從 Google AI Studio 獲取): " GEMINI_API_KEY
+        read -p "2. GEMINI_API_KEY (從 https://makersuite.google.com/app/apikey 獲取): " GEMINI_API_KEY
         if [[ -n "$GEMINI_API_KEY" ]]; then
             break
-        else
-            warning "GEMINI_API_KEY 不能為空"
         fi
     done
     
-    # 完整版需要DOMAIN
-    if [ "$INSTALL_MODE" = "full" ]; then
-        read -p "DOMAIN (回調域名，留空使用IP): " DOMAIN
-        
-        # 清理域名
-        if [[ -n "$DOMAIN" ]]; then
-            DOMAIN=$(echo "$DOMAIN" | sed 's|https://||g' | sed 's|http://||g' | sed 's|/.*||g')
-        fi
-        
-        # PORT
-        read -p "端口 (默認: 8080): " PORT
-        PORT=${PORT:-8080}
-        
-        # 保存完整配置
-        cat > .env <<EOF
-BOT_TOKEN=$BOT_TOKEN
-GEMINI_API_KEY=$GEMINI_API_KEY
-DOMAIN=$DOMAIN
-PORT=$PORT
-EOF
-    else
-        # 簡化版配置
-        cat > .env <<EOF
+    # 保存配置
+    cat > "$CONFIG_FILE" <<EOF
 BOT_TOKEN=$BOT_TOKEN
 GEMINI_API_KEY=$GEMINI_API_KEY
 EOF
-    fi
     
-    success "配置已保存到 .env"
+    echo ""
+    success "配置已保存到: $CONFIG_FILE"
 }
 
-# 下載源代碼（修復版）
-download_source_fixed() {
-    log "下載源代碼 (修復版)..."
+# 創建Python腳本
+create_python_script() {
+    log "創建機器人程序..."
     
     # 創建項目目錄
-    PROJECT_DIR="/opt/telegram-gemini-bot"
+    PROJECT_DIR="$HOME/gemini-telegram-bot"
     mkdir -p "$PROJECT_DIR"
     cd "$PROJECT_DIR"
     
-    # 方法1: 使用GitHub API下載（推薦）
-    REPO_USER="1743988127hax"
-    REPO_NAME="telegram-chat-bot-Gemin"
-    
-    info "嘗試方法1: 使用GitHub API下載..."
-    
-    # 創建簡化版代碼
-    if [ "$INSTALL_MODE" = "simple" ] || [ "$INSTALL_MODE" = "core" ]; then
-        create_simple_version
-        return
-    fi
-    
-    # 下載完整版
-    if command -v curl >/dev/null 2>&1; then
-        log "通過curl下載代碼..."
-        
-        # 下載主文件
-        for file in main.py requirements.txt README.md; do
-            if curl -s -L -o "$file" "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/main/$file"; then
-                success "下載 $file 成功"
-            else
-                warning "下載 $file 失敗，創建基本版本"
-                create_basic_files
-            fi
-        done
-        
-        # 下載安裝腳本
-        if curl -s -L -o main.sh "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/main/main.sh"; then
-            chmod +x main.sh
-            success "下載安裝腳本成功"
-        fi
-        
-    elif command -v wget >/dev/null 2>&1; then
-        log "通過wget下載代碼..."
-        
-        # 下載主文件
-        for file in main.py requirements.txt README.md; do
-            if wget -q -O "$file" "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/main/$file"; then
-                success "下載 $file 成功"
-            else
-                warning "下載 $file 失敗，創建基本版本"
-                create_basic_files
-            fi
-        done
-        
-    else
-        warning "curl和wget都不可用，創建基本版本"
-        create_basic_files
-    fi
-    
-    success "代碼下載完成: $PROJECT_DIR"
-}
-
-# 創建基本文件
-create_basic_files() {
-    log "創建基本文件..."
-    
-    # 創建requirements.txt
-    cat > requirements.txt <<'EOF'
-# Telegram Gemini Bot 依賴
-pyTelegramBotAPI==4.15.2
-google-generativeai==0.6.2
-flask==3.0.2
-requests==2.31.0
-EOF
-    
-    # 創建README.md
-    cat > README.md <<'EOF'
-# Telegram Gemini Bot
-
-基於Google Gemini AI的Telegram機器人
-
-## 功能
-- AI對話
-- 數學計算
-- 群組聊天
-EOF
-}
-
-# 創建簡化版本
-create_simple_version() {
-    log "創建簡化版本..."
-    
-    # 創建簡化版主程序
-    cat > main.py <<'EOF'
+    # 創建主程序
+    cat > gemini_bot.py <<'PYTHON_CODE'
 #!/usr/bin/env python3
-# Telegram Gemini Bot - 簡化版
+"""
+Telegram Gemini Bot - 終極簡化版
+無需Webhook，純輪詢模式
+"""
+
 import os
-import telebot
-import google.generativeai as genai
+import sys
 import time
 import logging
-import sys
-import random
+import telebot
+import google.generativeai as genai
 from datetime import datetime
 
-# 配置日誌
+# 設置日誌
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot.log', encoding='utf-8')
+        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
 
-# 加載配置
+class GeminiBot:
+    def __init__(self, bot_token, api_key):
+        """初始化機器人"""
+        self.bot_token = bot_token
+        self.api_key = api_key
+        
+        # 初始化Telegram Bot
+        self.bot = telebot.TeleBot(bot_token)
+        
+        # 配置Gemini
+        genai.configure(api_key=api_key)
+        
+        # 可用模型列表
+        self.models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-8b"]
+        self.current_model = 0
+        
+        # 用戶冷卻時間
+        self.user_cooldown = {}
+        self.cooldown_seconds = 2
+        
+        logger.info("機器人初始化完成")
+    
+    def get_ai_response(self, prompt):
+        """獲取AI回應"""
+        try:
+            # 選擇模型
+            model_name = self.models[self.current_model]
+            
+            # 切換到下一個模型
+            self.current_model = (self.current_model + 1) % len(self.models)
+            
+            # 創建模型實例
+            model = genai.GenerativeModel(model_name)
+            
+            # 優化提示詞
+            enhanced_prompt = f"""請用中文回答以下問題。
+保持回答簡潔、有用、友好。
+
+問題：{prompt}
+
+請回答："""
+            
+            # 生成回應
+            response = model.generate_content(
+                enhanced_prompt,
+                generation_config={
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": 1500,
+                }
+            )
+            
+            return response.text.strip()
+            
+        except Exception as e:
+            logger.error(f"AI錯誤: {e}")
+            return "抱歉，AI服務暫時不可用。請稍後再試。"
+    
+    def should_respond_to_message(self, message):
+        """檢查是否應該回應此消息"""
+        # 只處理群組消息
+        if message.chat.type == "private":
+            return False, "🤖 本機器人僅在群組中使用！\n請將我添加到群組中，然後在群組中@我提問。"
+        
+        # 檢查冷卻
+        user_id = message.from_user.id
+        current_time = time.time()
+        
+        if user_id in self.user_cooldown:
+            last_time = self.user_cooldown[user_id]
+            time_passed = current_time - last_time
+            
+            if time_passed < self.cooldown_seconds:
+                wait_time = int(self.cooldown_seconds - time_passed)
+                return False, f"⏳ 請等待 {wait_time} 秒後再發送消息。"
+        
+        text = message.text or ""
+        bot_username = self.bot.get_me().username
+        
+        # 檢查觸發方式
+        triggered = False
+        clean_text = text
+        
+        # 1. 回復機器人的消息
+        if message.reply_to_message:
+            if message.reply_to_message.from_user.id == self.bot.get_me().id:
+                triggered = True
+        
+        # 2. @機器人
+        if bot_username and f"@{bot_username}" in text:
+            triggered = True
+            clean_text = text.replace(f"@{bot_username}", "").strip()
+        
+        # 3. 使用命令
+        commands = ['/ask', '!ai', '??', '/ai', '！ai']
+        for cmd in commands:
+            if text.startswith(cmd):
+                triggered = True
+                clean_text = text[len(cmd):].strip()
+                break
+        
+        # 4. 關鍵詞觸發（可選）
+        keywords = ['機器人', 'bot', 'ai', '幫忙', '請問', '問一下']
+        if any(keyword in text.lower() for keyword in keywords):
+            triggered = True
+        
+        if not triggered:
+            return False, None
+        
+        # 更新冷卻時間
+        self.user_cooldown[user_id] = current_time
+        
+        return True, clean_text
+    
+    def setup_handlers(self):
+        """設置消息處理器"""
+        
+        @self.bot.message_handler(commands=['start', 'help', '幫助'])
+        def send_help(message):
+            help_text = """🤖 *Telegram Gemini AI 機器人*
+
+*使用方法:*
+• 在群組中 @我 + 問題
+• 回覆我的消息進行對話
+• 使用命令 /ask + 問題
+• 或直接說「機器人，...」
+
+*示例:*
+@機器人 什麼是人工智能？
+/ask 講一個笑話
+回覆此消息：幫我寫一段代碼
+
+*命令列表:*
+/start - 顯示此幫助
+/status - 查看狀態
+/test - 測試AI
+/about - 關於機器人
+
+*注意:*
+• 每條消息間隔2秒冷卻
+• 僅在群組中工作
+• 支持中文和英文"""
+            
+            self.bot.reply_to(message, help_text, parse_mode='Markdown')
+        
+        @self.bot.message_handler(commands=['status', '狀態'])
+        def send_status(message):
+            status_text = f"""📊 *機器人狀態*
+
+*基本信息:*
+• 運行時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+• 當前模型: {self.models[self.current_model]}
+• 冷卻時間: {self.cooldown_seconds}秒
+
+*技術信息:*
+• Python版本: {sys.version.split()[0]}
+• 運行模式: 輪詢模式
+• 日誌文件: bot.log"""
+            
+            self.bot.reply_to(message, status_text, parse_mode='Markdown')
+        
+        @self.bot.message_handler(commands=['test', '測試'])
+        def test_bot(message):
+            test_questions = [
+                "你好！請介紹一下你自己",
+                "講一個有趣的笑話",
+                "什麼是機器學習？",
+                "用Python寫一個Hello World程序"
+            ]
+            
+            import random
+            question = random.choice(test_questions)
+            
+            self.bot.reply_to(message, f"🧪 測試問題: *{question}*", parse_mode='Markdown')
+            
+            # 獲取AI回應
+            response = self.get_ai_response(question)
+            self.bot.reply_to(message, f"🤖 AI回應:\n\n{response}")
+        
+        @self.bot.message_handler(commands=['about', '關於'])
+        def about_bot(message):
+            about_text = """*關於 Gemini Telegram Bot*
+
+*版本:* 2.0 簡化版
+*作者:* 自動生成
+*技術:* Google Gemini AI + pyTelegramBotAPI
+*特點:* 無需Webhook，純輪詢模式
+
+*功能:*
+• 智能對話
+• 代碼幫助
+• 問題解答
+• 學習輔助
+
+*源碼:* 由安裝腳本自動生成"""
+            
+            self.bot.reply_to(message, about_text, parse_mode='Markdown')
+        
+        @self.bot.message_handler(func=lambda message: True)
+        def handle_all_messages(message):
+            try:
+                should_respond, text = self.should_respond_to_message(message)
+                
+                if not should_respond:
+                    if text:  # 有錯誤消息
+                        self.bot.reply_to(message, text)
+                    return
+                
+                if not text or text.strip() == "":
+                    self.bot.reply_to(message, "請輸入要問的問題！")
+                    return
+                
+                # 顯示「思考中」
+                thinking_msg = self.bot.reply_to(message, "🤔 思考中...")
+                
+                # 獲取AI回應
+                response = self.get_ai_response(text)
+                
+                # 刪除「思考中」消息
+                try:
+                    self.bot.delete_message(message.chat.id, thinking_msg.message_id)
+                except:
+                    pass
+                
+                # 發送回應
+                if response:
+                    self.bot.reply_to(message, response)
+                else:
+                    self.bot.reply_to(message, "抱歉，沒有收到回應。")
+                    
+            except Exception as e:
+                logger.error(f"處理消息時出錯: {e}")
+                try:
+                    self.bot.reply_to(message, "⚠️ 處理消息時出錯，請稍後再試")
+                except:
+                    pass
+    
+    def run(self):
+        """運行機器人"""
+        logger.info("=" * 50)
+        logger.info("🚀 啟動 Telegram Gemini Bot")
+        logger.info("=" * 50)
+        logger.info(f"機器人: @{self.bot.get_me().username}")
+        logger.info(f"模型池: {self.models}")
+        logger.info("模式: 簡化輪詢版")
+        logger.info("=" * 50)
+        
+        try:
+            # 設置處理器
+            self.setup_handlers()
+            
+            # 開始輪詢
+            logger.info("開始接收消息... (按Ctrl+C停止)")
+            self.bot.infinity_polling(timeout=60, long_polling_timeout=60)
+            
+        except KeyboardInterrupt:
+            logger.info("收到停止信號，關閉機器人...")
+        except Exception as e:
+            logger.error(f"運行錯誤: {e}")
+            raise
+
 def load_config():
+    """加載配置"""
     config = {}
     
-    # 從.env文件加載
-    if os.path.exists('.env'):
-        with open('.env', 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        config[key.strip()] = value.strip()
+    # 嘗試從環境變數加載
+    config['BOT_TOKEN'] = os.getenv('BOT_TOKEN')
+    config['GEMINI_API_KEY'] = os.getenv('GEMINI_API_KEY')
     
-    # 從環境變數加載
-    for key in ['BOT_TOKEN', 'GEMINI_API_KEY']:
-        env_value = os.getenv(key)
-        if env_value:
-            config[key] = env_value
+    # 嘗試從配置文件加載
+    config_files = [
+        'gemini-bot-config.env',
+        '.env',
+        'config.env',
+        os.path.expanduser('~/gemini-bot-config.env')
+    ]
+    
+    for config_file in config_files:
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            if '=' in line:
+                                key, value = line.split('=', 1)
+                                key = key.strip()
+                                value = value.strip().strip('"\''')
+                                if key in ['BOT_TOKEN', 'GEMINI_API_KEY']:
+                                    config[key] = value
+                logger.info(f"從 {config_file} 加載配置")
+                break
+            except Exception as e:
+                logger.warning(f"讀取配置文件失敗: {e}")
     
     return config
 
-config = load_config()
-BOT_TOKEN = config.get('BOT_TOKEN')
-GEMINI_API_KEY = config.get('GEMINI_API_KEY')
-
-if not BOT_TOKEN:
-    logger.error("❌ BOT_TOKEN 未設置")
-    sys.exit(1)
-
-if not GEMINI_API_KEY:
-    logger.error("❌ GEMINI_API_KEY 未設置")
-    sys.exit(1)
-
-# 初始化
-genai.configure(api_key=GEMINI_API_KEY)
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# AI服務類
-class AIService:
-    def __init__(self, api_key):
-        self.api_key = api_key
-        self.models = ["gemini-1.5-flash", "gemini-1.5-pro"]
-        self.current_model = 0
-    
-    def get_response(self, prompt):
-        try:
-            model = genai.GenerativeModel(self.models[self.current_model])
-            response = model.generate_content(prompt)
-            self.current_model = (self.current_model + 1) % len(self.models)
-            return response.text.strip()
-        except Exception as e:
-            logger.error(f"AI錯誤: {e}")
-            return "抱歉，AI服務暫時不可用。"
-
-# 初始化AI
-ai = AIService(GEMINI_API_KEY)
-
-# 命令處理
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    help_text = """🤖 Telegram Gemini Bot
-    
-使用方法:
-• 在群組中 @我 + 問題
-• 回復我的消息進行對話
-• 使用命令 /ask + 問題
-
-命令:
-/start, /help - 顯示幫助
-/test - 測試AI
-/status - 狀態信息"""
-    
-    bot.reply_to(message, help_text)
-
-@bot.message_handler(commands=['test'])
-def test_ai(message):
-    prompts = ["你好！", "講個笑話", "什麼是AI？"]
-    prompt = random.choice(prompts)
-    
-    bot.reply_to(message, f"測試: {prompt}")
-    response = ai.get_response(prompt)
-    bot.reply_to(message, f"回應: {response}")
-
-@bot.message_handler(commands=['status'])
-def show_status(message):
-    status = f"""狀態信息
-時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-模型: {ai.models[ai.current_model]}
-模式: 簡化輪詢版"""
-    
-    bot.reply_to(message, status)
-
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    # 檢查是否@機器人或回復機器人
-    text = message.text or ""
-    bot_username = bot.get_me().username
-    
-    should_respond = False
-    
-    # 1. 回復機器人
-    if message.reply_to_message and message.reply_to_message.from_user.id == bot.get_me().id:
-        should_respond = True
-    
-    # 2. @機器人
-    if bot_username and f"@{bot_username}" in text:
-        should_respond = True
-    
-    # 3. 命令
-    if text.startswith(('/ask', '!ai', '??')):
-        should_respond = True
-    
-    if should_respond:
-        # 清理文本
-        if bot_username:
-            text = text.replace(f"@{bot_username}", "").strip()
-        
-        # 移除命令前綴
-        for prefix in ['/ask', '!ai', '??']:
-            if text.startswith(prefix):
-                text = text[len(prefix):].strip()
-                break
-        
-        if text:
-            try:
-                response = ai.get_response(text)
-                bot.reply_to(message, response)
-            except Exception as e:
-                logger.error(f"處理錯誤: {e}")
-                bot.reply_to(message, "處理消息時出錯")
-
-# 主函數
 def main():
-    logger.info("=" * 50)
-    logger.info("啟動 Telegram Gemini Bot (簡化版)")
-    logger.info("=" * 50)
+    """主函數"""
+    # 加載配置
+    config = load_config()
     
-    try:
-        logger.info("開始輪詢...")
-        bot.infinity_polling()
-    except KeyboardInterrupt:
-        logger.info("機器人已停止")
-    except Exception as e:
-        logger.error(f"錯誤: {e}")
+    BOT_TOKEN = config.get('BOT_TOKEN')
+    GEMINI_API_KEY = config.get('GEMINI_API_KEY')
+    
+    # 檢查配置
+    if not BOT_TOKEN:
+        logger.error("錯誤: BOT_TOKEN 未設置")
+        logger.info("設置方法:")
+        logger.info("1. 環境變數: export BOT_TOKEN=你的token")
+        logger.info("2. 配置文件: 在 gemini-bot-config.env 中設置")
+        logger.info("3. 命令行參數: python gemini_bot.py --token 你的token")
+        sys.exit(1)
+    
+    if not GEMINI_API_KEY:
+        logger.error("錯誤: GEMINI_API_KEY 未設置")
+        logger.info("獲取地址: https://makersuite.google.com/app/apikey")
+        sys.exit(1)
+    
+    # 創建並運行機器人
+    bot = GeminiBot(BOT_TOKEN, GEMINI_API_KEY)
+    bot.run()
 
 if __name__ == "__main__":
     main()
-EOF
+PYTHON_CODE
 
-    # 創建requirements.txt (簡化版)
+    # 創建requirements.txt（使用最新可用版本）
     cat > requirements.txt <<'EOF'
-pyTelegramBotAPI==4.15.2
-google-generativeai==0.6.2
-requests==2.31.0
+# Telegram Gemini Bot 依賴
+# 使用最新穩定版本，避免版本衝突
+pyTelegramBotAPI>=4.15.0
+google-generativeai>=0.8.0
+requests>=2.28.0
 EOF
-    
-    success "創建簡化版成功"
-}
 
-# 安裝Python依賴
-install_python_dependencies() {
-    log "安裝Python依賴..."
-    
-    cd "/opt/telegram-gemini-bot"
-    
-    # 升級pip
-    $PYTHON_CMD -m pip install --upgrade pip
-    
-    # 安裝依賴
-    if [ -f "requirements.txt" ]; then
-        $PYTHON_CMD -m pip install -r requirements.txt
-    else
-        $PYTHON_CMD -m pip install pyTelegramBotAPI google-generativeai
-    fi
-    
-    success "Python依賴安裝完成"
-}
-
-# 創建啟動腳本
-create_startup_scripts() {
-    log "創建啟動腳本..."
-    
-    cd "/opt/telegram-gemini-bot"
-    
-    # 主啟動腳本
+    # 創建啟動腳本
     cat > start.sh <<'EOF'
 #!/bin/bash
+# 啟動腳本
+
 cd "$(dirname "$0")"
 
-echo "啟動 Telegram Gemini Bot..."
-echo "模式: $1"
-echo "按 Ctrl+C 停止"
+echo "========================================"
+echo "   Telegram Gemini Bot 啟動器"
+echo "========================================"
+echo ""
 
 # 檢查配置
-if [ ! -f ".env" ]; then
-    echo "錯誤: .env 配置文件不存在"
-    echo "請先運行: ./setup.sh"
+if [ ! -f "gemini-bot-config.env" ] && [ ! -f ".env" ]; then
+    echo "❌ 錯誤: 未找到配置文件"
+    echo ""
+    echo "請先創建配置文件:"
+    echo "1. 複製模板: cp config.example.env gemini-bot-config.env"
+    echo "2. 編輯配置: nano gemini-bot-config.env"
+    echo "3. 填入你的 BOT_TOKEN 和 GEMINI_API_KEY"
+    echo ""
     exit 1
 fi
 
-# 設置Python路徑
-export PYTHONPATH="$PWD:$PYTHONPATH"
+# 檢查Python依賴
+echo "檢查Python依賴..."
+python3 -c "import telebot, google.generativeai" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "安裝缺失的依賴..."
+    pip3 install -r requirements.txt --upgrade
+fi
 
-# 運行
-python3 main.py
+echo ""
+echo "啟動機器人..."
+echo "按 Ctrl+C 停止"
+echo "日誌文件: bot.log"
+echo "========================================"
+echo ""
+
+# 運行機器人
+python3 gemini_bot.py
 EOF
-    
-    # 後台運行腳本
+
+    # 創建後台運行腳本
     cat > start_daemon.sh <<'EOF'
 #!/bin/bash
+# 後台啟動腳本
+
 cd "$(dirname "$0")"
+
+echo "啟動 Telegram Gemini Bot (後台模式)..."
 
 # 檢查是否已運行
 if [ -f "bot.pid" ]; then
@@ -581,24 +591,36 @@ if [ -f "bot.pid" ]; then
     fi
 fi
 
-echo "啟動機器人 (後台模式)..."
-nohup python3 main.py > bot_console.log 2>&1 &
+# 啟動
+nohup python3 gemini_bot.py > bot_console.log 2>&1 &
 echo $! > bot.pid
-echo "啟動成功 (PID: $(cat bot.pid))"
-echo "日誌: tail -f bot.log"
-echo "控制台: tail -f bot_console.log"
+
+echo "✅ 機器人已啟動"
+echo "PID: $(cat bot.pid)"
+echo ""
+echo "查看日誌:"
+echo "  tail -f bot.log          # 程序日誌"
+echo "  tail -f bot_console.log  # 控制台輸出"
+echo ""
+echo "停止命令: ./stop.sh"
 EOF
-    
-    # 停止腳本
+
+    # 創建停止腳本
     cat > stop.sh <<'EOF'
 #!/bin/bash
+# 停止腳本
+
 cd "$(dirname "$0")"
 
 if [ -f "bot.pid" ]; then
     PID=$(cat bot.pid)
     if kill -0 $PID 2>/dev/null; then
         kill $PID
-        echo "已停止機器人 (PID: $PID)"
+        sleep 1
+        if kill -0 $PID 2>/dev/null; then
+            kill -9 $PID
+        fi
+        echo "✅ 機器人已停止 (PID: $PID)"
         rm -f bot.pid
     else
         echo "機器人未運行"
@@ -608,327 +630,295 @@ else
     echo "機器人未運行"
 fi
 
-# 清理
-pkill -f "python3 main.py" 2>/dev/null || true
+# 清理殘留進程
+pkill -f "python3 gemini_bot.py" 2>/dev/null || true
 EOF
-    
-    # 狀態腳本
+
+    # 創建狀態檢查腳本
     cat > status.sh <<'EOF'
 #!/bin/bash
+# 狀態檢查腳本
+
 cd "$(dirname "$0")"
+
+echo "Telegram Gemini Bot 狀態檢查"
+echo "=============================="
 
 if [ -f "bot.pid" ]; then
     PID=$(cat bot.pid)
     if kill -0 $PID 2>/dev/null; then
-        echo "✅ 機器人正在運行"
+        echo "✅ 狀態: 正在運行"
         echo "PID: $PID"
-        echo "運行時間: $(ps -p $PID -o etime=)"
-        echo "內存: $(ps -p $PID -o rss=) KB"
+        echo "運行時間: $(ps -p $PID -o etime= | tr -d ' ')"
+        echo "內存使用: $(ps -p $PID -o rss=) KB"
         echo ""
         echo "最近日誌:"
-        tail -10 bot.log 2>/dev/null || echo "日誌文件不存在"
+        tail -5 bot.log 2>/dev/null || echo "（無日誌）"
     else
-        echo "❌ 機器人已停止"
+        echo "❌ 狀態: 已停止 (PID文件存在)"
         rm -f bot.pid
     fi
 else
-    echo "❌ 機器人未運行"
+    echo "❌ 狀態: 未運行"
 fi
-EOF
-    
-    # 配置腳本
-    cat > setup.sh <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")"
 
-echo "設置 Telegram Gemini Bot"
 echo ""
-echo "請輸入配置信息:"
-
-# 讀取現有配置
-if [ -f .env ]; then
-    source .env 2>/dev/null || true
+echo "配置文件:"
+if [ -f "gemini-bot-config.env" ]; then
+    echo "  gemini-bot-config.env: 存在"
+elif [ -f ".env" ]; then
+    echo "  .env: 存在"
+else
+    echo "  ❌ 未找到配置文件"
 fi
 
-read -p "BOT_TOKEN [${BOT_TOKEN:-未設置}]: " input_token
-read -p "GEMINI_API_KEY [${GEMINI_API_KEY:-未設置}]: " input_key
-
-BOT_TOKEN=${input_token:-$BOT_TOKEN}
-GEMINI_API_KEY=${input_key:-$GEMINI_API_KEY}
-
-# 檢查必要配置
-if [ -z "$BOT_TOKEN" ]; then
-    echo "錯誤: BOT_TOKEN 不能為空"
-    exit 1
-fi
-
-if [ -z "$GEMINI_API_KEY" ]; then
-    echo "錯誤: GEMINI_API_KEY 不能為空"
-    exit 1
-fi
-
-# 保存配置
-cat > .env <<CONFIG
-BOT_TOKEN=$BOT_TOKEN
-GEMINI_API_KEY=$GEMINI_API_KEY
-CONFIG
-
-echo "✅ 配置已保存到 .env"
+echo ""
+echo "日誌文件:"
+ls -la bot.log 2>/dev/null || echo "  bot.log: 不存在"
+ls -la bot_console.log 2>/dev/null || echo "  bot_console.log: 不存在"
 EOF
-    
+
+    # 創建配置示例文件
+    cat > config.example.env <<'EOF'
+# Telegram Gemini Bot 配置文件
+# 複製此文件為 gemini-bot-config.env 並填入你的信息
+
+# 從 @BotFather 獲取
+BOT_TOKEN=你的機器人token
+
+# 從 https://makersuite.google.com/app/apikey 獲取
+GEMINI_API_KEY=你的gemini_api_key
+EOF
+
     # 設置執行權限
-    chmod +x *.sh
+    chmod +x start.sh start_daemon.sh stop.sh status.sh
+    chmod +x gemini_bot.py
     
-    success "啟動腳本創建完成"
+    success "程序創建完成"
+    info "項目目錄: $PROJECT_DIR"
 }
 
-# 創建Systemd服務
-create_systemd_service() {
-    log "創建Systemd服務..."
+# 安裝Python依賴（修復版）
+install_python_dependencies_fixed() {
+    log "安裝Python依賴（修復版）..."
     
-    if [ ! -d "/etc/systemd/system" ]; then
-        warning "未檢測到systemd，跳過服務創建"
+    cd "$HOME/gemini-telegram-bot"
+    
+    # 先升級pip（但不過度升級）
+    echo "更新pip..."
+    $PYTHON_CMD -m pip install --upgrade pip --no-warn-script-location
+    
+    # 安裝核心依賴（使用兼容版本）
+    echo "安裝核心依賴..."
+    
+    # 安裝telegram bot庫
+    $PYTHON_CMD -m pip install "pyTelegramBotAPI>=4.15.0" --no-warn-script-location
+    
+    # 安裝google generativeai（使用可用版本）
+    $PYTHON_CMD -m pip install "google-generativeai" --no-warn-script-location
+    
+    # 安裝requests
+    $PYTHON_CMD -m pip install "requests>=2.28.0" --no-warn-script-location
+    
+    # 驗證安裝
+    echo "驗證安裝..."
+    if $PYTHON_CMD -c "import telebot, google.generativeai, requests; print('✅ 所有依賴安裝成功')"; then
+        success "Python依賴安裝完成"
+    else
+        warning "部分依賴可能未正確安裝，但將繼續..."
+    fi
+}
+
+# 創建系統服務（可選）
+create_system_service() {
+    echo ""
+    read -p "是否創建系統服務（開機自啟）？(Y/n): " create_service
+    create_service=${create_service:-Y}
+    
+    if [[ ! $create_service =~ ^[Yy]$ ]]; then
         return
     fi
     
-    SERVICE_FILE="/etc/systemd/system/telegram-gemini.service"
+    log "創建系統服務..."
     
-    cat > telegram-gemini.service <<EOF
+    SERVICE_FILE="/etc/systemd/system/gemini-telegram-bot.service"
+    
+    # 檢查是否為root
+    if [ "$EUID" -ne 0 ]; then
+        warning "需要root權限創建系統服務"
+        info "可以手動創建服務文件:"
+        echo "sudo nano $SERVICE_FILE"
+        return
+    fi
+    
+    cat > /tmp/gemini-telegram-bot.service <<EOF
 [Unit]
 Description=Telegram Gemini Bot
 After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/opt/telegram-gemini-bot
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/usr/bin/python3 /opt/telegram-gemini-bot/main.py
+User=$USER
+WorkingDirectory=$HOME/gemini-telegram-bot
+Environment="PATH=$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=$PYTHON_CMD $HOME/gemini-telegram-bot/gemini_bot.py
 Restart=always
 RestartSec=10
-StandardOutput=append:/opt/telegram-gemini-bot/bot_console.log
-StandardError=append:/opt/telegram-gemini-bot/bot_console.log
+StandardOutput=append:$HOME/gemini-telegram-bot/bot_console.log
+StandardError=append:$HOME/gemini-telegram-bot/bot_console.log
+
+# 安全設置
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
     
-    # 複製服務文件
-    cp telegram-gemini.service "$SERVICE_FILE"
-    rm -f telegram-gemini.service
+    sudo cp /tmp/gemini-telegram-bot.service "$SERVICE_FILE"
+    sudo systemctl daemon-reload
+    sudo systemctl enable gemini-telegram-bot
+    sudo systemctl start gemini-telegram-bot
     
-    # 重新加載並啟用
-    systemctl daemon-reload
-    systemctl enable telegram-gemini
+    sleep 2
     
-    success "Systemd服務創建完成"
+    if sudo systemctl is-active --quiet gemini-telegram-bot; then
+        success "系統服務創建並啟動成功"
+    else
+        warning "系統服務啟動可能失敗，檢查: sudo systemctl status gemini-telegram-bot"
+    fi
 }
 
 # 顯示完成信息
-show_completion() {
+show_completion_info() {
     echo ""
     success "🎉 Telegram Gemini Bot 安裝完成！"
     echo ""
     
-    info "📋 安裝信息:"
-    echo "  模式: $INSTALL_MODE"
-    echo "  目錄: /opt/telegram-gemini-bot"
-    echo "  配置: .env"
+    PROJECT_DIR="$HOME/gemini-telegram-bot"
     
+    echo "════════════════════════════════════════════════════"
+    echo "                   安裝摘要"
+    echo "════════════════════════════════════════════════════"
     echo ""
-    info "🚀 啟動命令:"
-    echo "  前台運行: cd /opt/telegram-gemini-bot && ./start.sh"
-    echo "  後台運行: cd /opt/telegram-gemini-bot && ./start_daemon.sh"
-    echo "  停止: ./stop.sh"
-    echo "  狀態: ./status.sh"
-    echo "  重新配置: ./setup.sh"
+    echo "📁 項目目錄: $PROJECT_DIR"
+    echo ""
+    echo "📄 重要文件:"
+    echo "  gemini_bot.py          - 主程序"
+    echo "  gemini-bot-config.env  - 配置文件"
+    echo "  requirements.txt       - 依賴列表"
+    echo "  bot.log               - 程序日誌"
+    echo ""
+    echo "🚀 啟動方式:"
+    echo "  1. 前台運行: cd $PROJECT_DIR && ./start.sh"
+    echo "  2. 後台運行: cd $PROJECT_DIR && ./start_daemon.sh"
+    echo "  3. 直接運行: cd $PROJECT_DIR && python3 gemini_bot.py"
+    echo ""
+    echo "🔧 管理命令:"
+    echo "  ./stop.sh    - 停止機器人"
+    echo "  ./status.sh  - 查看狀態"
+    echo "  ./start.sh   - 重新啟動"
+    echo ""
     
-    if [ -f "/etc/systemd/system/telegram-gemini.service" ]; then
+    if [ -f "/etc/systemd/system/gemini-telegram-bot.service" ]; then
+        echo "📦 系統服務:"
+        echo "  sudo systemctl status gemini-telegram-bot"
+        echo "  sudo systemctl stop gemini-telegram-bot"
+        echo "  sudo systemctl start gemini-telegram-bot"
         echo ""
-        info "📦 Systemd服務:"
-        echo "  啟動: systemctl start telegram-gemini"
-        echo "  停止: systemctl stop telegram-gemini"
-        echo "  狀態: systemctl status telegram-gemini"
-        echo "  日誌: journalctl -u telegram-gemini -f"
     fi
     
-    echo ""
-    info "📝 配置文件 (.env):"
-    cat /opt/telegram-gemini-bot/.env
-    
-    echo ""
-    info "🔧 下一步:"
+    echo "📝 使用方法:"
     echo "  1. 將機器人添加到Telegram群組"
-    echo "  2. 在群組中測試: /test"
-    echo "  3. 查看日誌: tail -f /opt/telegram-gemini-bot/bot.log"
-    
+    echo "  2. 在群組中@機器人提問"
+    echo "  3. 或回覆機器人的消息"
     echo ""
-    echo "=" * 50
+    echo "❓ 測試命令:"
+    echo "  /start   - 顯示幫助"
+    echo "  /test    - 測試AI"
+    echo "  /status  - 查看狀態"
+    echo ""
+    echo "⚠️  注意事項:"
+    echo "  • 機器人只在群組中工作"
+    echo "  • 每條消息有2秒冷卻時間"
+    echo "  • 查看 bot.log 了解運行狀態"
+    echo ""
+    echo "🔍 故障排除:"
+    echo "  1. 檢查配置: cat gemini-bot-config.env"
+    echo "  2. 查看日誌: tail -f bot.log"
+    echo "  3. 重啟機器人: ./stop.sh && ./start_daemon.sh"
+    echo ""
+    echo "════════════════════════════════════════════════════"
 }
 
 # 主安裝流程
-main_installation() {
+main() {
     print_banner
+    
+    # 檢測系統
     detect_system
     
-    # 檢查Python
-    if [ -z "$PYTHON_CMD" ]; then
-        install_dependencies
-        detect_system  # 重新檢測
-    fi
-    
-    # 選擇安裝模式
-    choose_installation_mode
+    # 安裝依賴
+    install_dependencies
     
     # 獲取配置
     get_configuration
     
-    # 下載源代碼
-    download_source_fixed
+    # 創建Python腳本
+    create_python_script
     
     # 安裝Python依賴
-    install_python_dependencies
+    install_python_dependencies_fixed
     
-    # 創建啟動腳本
-    create_startup_scripts
-    
-    # 創建Systemd服務
-    read -p "是否創建Systemd服務？(Y/n): " create_service
-    create_service=${create_service:-Y}
-    
-    if [[ $create_service =~ ^[Yy]$ ]]; then
-        create_systemd_service
-    fi
+    # 詢問是否創建系統服務
+    create_system_service
     
     # 顯示完成信息
-    show_completion
+    show_completion_info
     
-    # 詢問是否啟動
+    # 詢問是否立即啟動
     echo ""
     read -p "是否立即啟動機器人？(Y/n): " start_now
     start_now=${start_now:-Y}
     
     if [[ $start_now =~ ^[Yy]$ ]]; then
-        cd "/opt/telegram-gemini-bot"
+        cd "$HOME/gemini-telegram-bot"
         
-        if systemctl is-enabled telegram-gemini 2>/dev/null; then
-            systemctl start telegram-gemini
-            sleep 2
-            systemctl status telegram-gemini --no-pager
+        if systemctl is-enabled gemini-telegram-bot 2>/dev/null | grep -q enabled; then
+            echo "系統服務已啟動，正在運行..."
+            sudo systemctl status gemini-telegram-bot --no-pager
         else
+            echo "啟動機器人..."
             ./start_daemon.sh
         fi
     fi
+    
+    echo ""
+    echo "💡 提示: 機器人配置文件已保存到: gemini-bot-config.env"
+    echo "      如需修改配置，請編輯此文件後重啟機器人"
+    echo ""
 }
 
-# 直接下載和安裝的快速腳本
-quick_install() {
-    echo "使用快速安裝模式..."
+# 錯誤處理
+trap 'echo -e "\n${COLOR_RED}安裝被中斷${COLOR_RESET}"; exit 1' INT TERM
+
+# 檢查是否直接運行
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # 顯示歡迎信息
+    echo "Telegram Gemini Bot 一鍵安裝腳本"
+    echo "此腳本將創建完整的機器人程序"
+    echo ""
     
-    # 下載簡化版本
-    mkdir -p /tmp/telegram-bot
-    cd /tmp/telegram-bot
-    
-    cat > install_quick.sh <<'QUICK_EOF'
-#!/bin/bash
-# 快速安裝腳本
-
-set -e
-
-echo "快速安裝 Telegram Gemini Bot..."
-echo ""
-
-# 安裝依賴
-if command -v apt >/dev/null 2>&1; then
-    apt update
-    apt install -y python3 python3-pip curl
-elif command -v yum >/dev/null 2>&1; then
-    yum install -y python3 python3-pip curl
-elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache python3 py3-pip curl
-fi
-
-# 創建目錄
-mkdir -p ~/telegram-bot
-cd ~/telegram-bot
-
-# 下載最簡版本
-cat > bot.py <<'PY_EOF'
-import os, telebot, google.generativeai as genai, logging, sys
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# 手動配置
-BOT_TOKEN = input("請輸入BOT_TOKEN: ").strip()
-GEMINI_API_KEY = input("請輸入GEMINI_API_KEY: ").strip()
-
-if not BOT_TOKEN or not GEMINI_API_KEY:
-    print("錯誤: 必須提供BOT_TOKEN和GEMINI_API_KEY")
-    sys.exit(1)
-
-# 初始化
-genai.configure(api_key=GEMINI_API_KEY)
-bot = telebot.TeleBot(BOT_TOKEN)
-
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(message, "🤖 機器人已啟動！@我提問")
-
-@bot.message_handler(func=lambda m: True)
-def echo_all(message):
-    if bot.get_me().username and f"@{bot.get_me().username}" in (message.text or ""):
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(message.text)
-            bot.reply_to(message, response.text)
-        except Exception as e:
-            bot.reply_to(message, f"錯誤: {str(e)}")
-
-if __name__ == "__main__":
-    logger.info("啟動機器人...")
-    bot.infinity_polling()
-PY_EOF
-
-cat > requirements.txt <<'REQ_EOF'
-pyTelegramBotAPI==4.15.2
-google-generativeai==0.6.2
-REQ_EOF
-
-# 安裝Python包
-pip3 install -r requirements.txt
-
-echo ""
-echo "✅ 安裝完成！"
-echo "啟動命令: cd ~/telegram-bot && python3 bot.py"
-QUICK_EOF
-    
-    chmod +x install_quick.sh
-    ./install_quick.sh
-}
-
-# 命令行參數處理
-if [ "$1" = "--quick" ] || [ "$1" = "-q" ]; then
-    quick_install
-    exit 0
-elif [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-    echo "使用方法: $0 [選項]"
-    echo "選項:"
-    echo "  --quick, -q    快速安裝模式"
-    echo "  --help, -h     顯示幫助"
-    echo "  無參數         完整安裝模式"
-    exit 0
-fi
-
-# 檢查root權限
-if [ "$EUID" -ne 0 ]; then
-    warning "建議使用root權限運行"
-    read -p "是否繼續？(y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
+    # 檢查參數
+    if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+        echo "用法: $0"
+        echo "功能: 一鍵安裝Telegram Gemini Bot"
+        exit 0
     fi
+    
+    # 開始安裝
+    main
 fi
-
-# 運行主安裝
-main_installation

@@ -1,6 +1,6 @@
 # Telegram Gemini Bot 依賴
 pyTelegramBotAPI==4.15.2
-google-generativeai==0.6.2
+google-generativeai==0.8.0
 flask==3.0.2
 requests==2.31.0
 
